@@ -18,4 +18,4 @@ classifiers = [
 ]
 [project.urls]
 "Homepage" = "https://github.com/ArisenPhoenix/FileUtils"
-"Bug Tracekr" = "https://github.com/ArisenPhoenix/FileUtils/issues"
+"Bug Tracker" = "https://github.com/ArisenPhoenix/FileUtils/issues"

@@ -1,36 +1,87 @@
 import os
 import shutil
 import json
+from os import PathLike
+import pathlib
 
 
-class Path:
-    def __init__(self, path: str):
-        if not isinstance(path, str):
-            raise ValueError(f"Path: {path} Must Be Of Type 'str', it is currently of type: {type(str)}")
+path_type = str | PathLike
+
+class PathNotFoundError(Exception):
+    def __init__(self, path: str = "", message: str = None):
+        if message is None:
+            message = f"The specified path was not found: '{path}'"
+        super().__init__(message)
+        # self.path = path
+
+class PathNotPathTypeError(Exception):
+    def __init__(self, path: str = "", message: str = None):
+        if message is None:
+            message = f"{path} Must Be Of Type 'str', it is currently of type: {type(path)}"
+        super().__init__(message)
+        # self.path = path
+
+
+class Path(PathLike):
+    def __init__(self, path: path_type):  #make=False
+        if not isinstance(path, path_type):
+            raise PathNotPathTypeError(path)
+        if isinstance(path, pathlib.Path):
+            path = path.__fspath__()
+
         self.path = path
         self.type = None
+        # self.dynamic = make
+        # if not (self.is_dir or self.is_file) and make:
+        #     has_ext = self.get_ext()
+        #
+        #     if has_ext:
+        #         self.make_file(self.path)
+        #     else:
+        #         self.make_dir(self.path)
+
         if self.check_is_dir():
             self.type = "dir"
         elif self.check_is_file():
             self.type = "file"
         else:
-            raise ValueError(f"Path Provided: '{self.path}' is not a valid file_path nor a directory")
+            raise PathNotFoundError(self.path)
 
-        self.name = None
-        if not self.name:
-            self.name = self.path.split("/")[-1]
+    def get_ext(self):
+        try:
+            ext = os.path.splitext(self.path)[1]
+            if ext != "":
+                return ext
+        except IndexError as e:
+            pass
+        return None
 
-    def check_is_dir(self, path=None):
+    @property
+    def is_dir(self):
+        return os.path.isdir(self.path)
+
+    @property
+    def is_file(self):
+        return os.path.isfile(self)
+
+    def exists(self):
+        return self.is_dir or self.is_file
+
+    def check_is_dir(self, path: path_type = None):
         if path is None:
-
             return os.path.isdir(self.path)
-        elif isinstance(path, str):
+        elif isinstance(path, path_type):
             return os.path.isdir(path)
         else:
-            raise ValueError(f"The path {path} is not a string and cannot be used.")
+            raise PathNotPathTypeError(path)
 
-    def check_is_file(self):
-        return os.path.isfile(self.path)
+    def check_is_file(self, path: path_type = None):
+        if path is None:
+            return os.path.isfile(self)
+        elif isinstance(path, path_type):
+            return os.path.isfile(path)
+        else:
+            raise PathNotPathTypeError(path)
 
     def check_is_text(self, match_list: list):
         for text in match_list:
@@ -47,10 +98,10 @@ class Path:
     def get_clean_name(self):
         return self.path.split("/")[-1]
 
-    def get_current_path(self):
+    def get_parent_segments(self):
         return self.path.split("/")[0:-1]
 
-    def move(self, new_path: str):
+    def move(self, new_path: path_type):
 
         if self.check_is_dir() or self.check_is_file():
             return Move().move(self.path, new_path)
@@ -58,32 +109,68 @@ class Path:
             raise NotADirectoryError(f"The Path That Dir Contains: {self.path} Is Not A Valid Directory")
         elif not self.check_is_file():
             raise FileNotFoundError(f"The Path That Dir Contains: {self.path} Is Not A Valid Directory")
+        return None
 
-
+    @property
     def name(self):
-        return self.name
+        return str(os.path.basename(self.path))
 
-    def write_file(self, filename: str, data, file_type: str, operation: str, callback=None):
+    def write_file(self, filename: path_type, data, file_type: str, operation: str, callback=None):
         """Don't Include The File Extension In The Name. That Is Done For You."""
+        file_type = file_type.lower()
 
-        if isinstance(filename, str) and isinstance(file_type, str):
+        if (isinstance(filename, str) or isinstance(filename, PathLike)) and isinstance(file_type, str):
             new_file_path = os.path.join(self.path, filename)
-            new_file_path += f".{file_type}"
-            with open(new_file_path, operation, encoding="utf-8") as file:
-                if file_type == "json":
+            new_file_path += f".{file_type}" if file_type is not None else ""
+            new_file_path = rf"{new_file_path}"
+
+            text_types = ["json", "txt"]
+            binary_types = ["jpg", "png", "gif", "pdf"]
+
+            if file_type in text_types:
+                operation = operation.replace("b", "")  # Just in case
+                encoding = "utf-8"
+            elif file_type in binary_types:
+                operation = operation.replace("t", "") + "b"  # Force binary mode
+                encoding = None
+            else:
+                raise ValueError(f"Unsupported file type: {file_type}")
+
+            with open(new_file_path, operation, encoding=encoding) as file:
+                if callable(callback):
+                    callback(filename, data, file_type, operation, file)
+                elif file_type == "json":
                     json.dump(data, file, ensure_ascii=False, indent=4)
                 elif file_type == "txt":
                     file.write(data)
-                elif callback:
-                    callback(filename, data, file_type, operation, file)
+                elif file_type == "jpg":
+                    file.write(data)
                 else:
-                    ValueError(f"File Type {file_type} Not In The Covered Types Of Files ... Yet")
+                    raise ValueError(f"Unsupported file type: {file_type}")
         else:
             raise ValueError(
                 f"Both filename And filetype Must Be of Type 'str'\n You Provided {filename} and {file_type}")
+        return new_file_path
 
-    def make_dir(self, path: str = None):
-        if isinstance(path, str):
+    def make_file(self, path: str):
+        new_path = os.path.join(self.path, path)
+        if not os.path.exists(new_path):
+            with open(new_path, "w") as f:
+                pass
+
+    def make(self, path = None):
+        if path is None:
+            path = self.path
+        if not os.path.isdir(path) and not os.path.isfile(path):
+            ext = self.get_ext()
+            if not ext or ext == "":
+                self.make_dir(path)
+            else:
+                self.make_file(path)
+
+
+    def make_dir(self, path: path_type = None):
+        if isinstance(path, path_type):
 
             temp_path = os.path.join(path)
             if self.check_is_dir(temp_path):
@@ -101,64 +188,78 @@ class Path:
         else:
             raise ValueError(f"The path: {path} is not a string and cannot be created.")
 
-    def append(self, dirname: str):
+    def append(self, dir_name: path_type):
         """
         Directly Appends The Dirname Provided And Does Nothing Afterward.
         """
-        self.path = os.path.join(self.path, dirname)
+        self.path = os.path.join(self.path, dir_name)
         return self
 
     def __str__(self):
         return self.path
 
     def __repr__(self):
+        return f"{self.__class__.__name__}({self.path!r})"
+
+    def __fspath__(self):
         return self.path
+
+    def __truediv__(self, other: path_type):
+        self.make(other)
+        new_path = os.path.join(self.path, other)
+        if os.path.isdir(new_path):
+          return Dir(new_path)
+        elif os.path.isfile(new_path):
+            return File(self.path)
+        else:
+            raise PathNotFoundError(new_path)
 
 
 class Dir(Path):
-    def __init__(self, dir_path: str):
+    def __init__(self, dir_path: path_type):
         super().__init__(dir_path)
-        self.path = dir_path
-        self.is_dir = self.check_is_dir()
 
-    def add(self, next_level: str):
+    @property
+    def is_absolute(self):
+        return os.path.isabs(self.path)
+
+    @staticmethod
+    def is_abs(path: str | Path):
+        return os.path.isdir(path)
+
+    def add(self, next_level: path_type):
         """
-        Directly moves to the next path provided. If it doesn't exist, it is created.
+        Attempts to create a subdirectory with the given name.
+        Fails (raises) if it already exists as a file — use `dig` for flexible traversal.
         """
-        if isinstance(next_level, str):
-            temp_loc = os.path.join(self.path, next_level)
-            if self.check_is_dir(temp_loc):
-                self.path = temp_loc
-            else:
-                try:
-                    os.mkdir(temp_loc)
-                    self.path = temp_loc
-                except FileExistsError:
-                    return File(temp_loc)
-                except FileNotFoundError:
-                    pass
-                except IsADirectoryError:
-                    self.path = temp_loc
-            return self.path
+        if not isinstance(next_level, path_type):
+            raise ValueError(f"Expected string for next directory level, got {type(next_level)}")
 
-        else:
-            raise ValueError(f"The Next Level of type: {type(next_level)} Is Not Able To Make A Directory")
+        temp_loc = os.path.join(self.path, next_level)
 
-    def split(self, path: str = None) -> tuple | list:
+        if self.check_is_dir(temp_loc):
+            return self
+
+        if self.check_is_file(temp_loc):
+            raise FileExistsError(f"The path provided is a file: {temp_loc}")
+
+        os.mkdir(temp_loc)
+        return self
+
+    def split(self, path: path_type = None) -> tuple | list:
         if path is None:
             return os.path.split(self.path)
-        elif isinstance(path, str):
+        elif isinstance(path, path_type):
             return os.path.split(path)
         else:
             raise ValueError(f"The path: {path} is not of type {str}")
 
     @staticmethod
     def join(path: list | tuple):
-        # print("")
-        if type(path) == list or type(path) == tuple:
-            return os.path.join(*path)
+        if isinstance(path, list) or isinstance(path, tuple):
+            return str(os.path.join(path[0], *path[1:]))
         else:
-            raise ValueError(f"The path: {path} is not of type {list}")
+            raise ValueError(f"{path} is not of type {list}")
 
     def dig(self, new_folder_name: str):
         """Goes To The Specified Next Level 'Deeper' Directory. If It Doesn't Yet Exist, It Will..."""
@@ -169,9 +270,17 @@ class Dir(Path):
         else:
             if self.check_is_dir():
                 new_level = self.add(temp_folder_path)
-                if self.check_is_dir(new_level):
-                    self.path = new_level
+                self.path = temp_folder_path
+                if new_level.is_dir:
+                    self.path = new_level.path
+            else:
+                os.rmdir(temp_folder_path)
+                raise ValueError("You dig into air.")
         return self
+
+    def make_file(self, file_name: str):
+        path = os.path.join(self, file_name)
+        return Path(path)
 
     def rise(self):
         new_folder_path = self.split()[:-1]
@@ -190,35 +299,49 @@ class Dir(Path):
                 return self
             else:
                 return False
+        return None
+
+    def find(self, filename):
+        for file in os.listdir(self):
+            if file == filename:
+                return Dir(os.path.join(self, filename))
+        return False
 
     def slide(self, folder_name):
+        """
+        Creates a new subdirectory under the current path with the given folder name.
+        If it already exists, it won't raise an error.
+        Advances self.path to that subdirectory.
+        """
+        new_path = os.path.join(self.path, folder_name)
+        if not os.path.isdir(new_path):
+            raise NotADirectoryError(f"Cannot slide into non-directory: {new_path}")
         try:
-            if len(os.listdir(self.path)) == 0:
-                temp = os.path.join(self.path, folder_name)
-                os.mkdir(temp)
-            else:
-                temp = os.path.join(self.path, folder_name)
-                os.mkdir(temp)
+            os.mkdir(new_path)
         except FileExistsError:
             pass
+        self.path = new_path
         return self
 
-    def __str__(self):
-        return self.path
+    def __truediv__(self, other: path_type):
+        self.dig(other)
+        if self.is_file:
+            return File(self.path)
+        return self
+
 
 
 class File(Path):
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: path_type):
         super().__init__(file_path)
-        self.path = file_path
-        self.is_file = self.check_is_file()
 
     def make_file(self):
         if not self.is_file:
-            os.mkdir(self.path)
-            return True
-        else:
-            return False
+            with open(self.path, "a"):
+                pass
+        return self
+
+
 
 
 class Move:
@@ -253,7 +376,7 @@ class Move:
 
     def move_file(self, filepath: str, new_base_dir: str, match_list: list = None):
         file = File(filepath)
-        if file.is_file and type(match_list) == list:
+        if file.is_file and isinstance(match_list, list):
             return self.move_match(filepath, match_list, new_base_dir)
         else:
             return self.move(filepath, new_base_dir)
